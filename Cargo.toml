@@ -1,0 +1,14 @@
+[package]
+name = "sg"
+version = "0.1.0"
+authors = ["Dror Levin <spatz@psybear.com>"]
+description = "Library for Linux's SCSI Generic (SG) interface"
+repository = "https://github.com/drrlvn/sg"
+license = "Apache-2.0"
+
+[dependencies]
+libc = "0.2.43"
+vecio = "0.1.0"
+
+[build-dependencies]
+bindgen = "0.38.0"
