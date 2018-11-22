@@ -117,14 +117,14 @@ impl Task {
     }
 
     ///
-    pub unsafe fn set_usr_ptr<T>(&mut self, ptr: &T) -> &mut Self {
-        self.0.usr_ptr = ptr as *const T as *mut std::os::raw::c_void;
+    pub fn set_usr_ptr(&mut self, ptr: *const std::os::raw::c_void) -> &mut Self {
+        self.0.usr_ptr = ptr as *mut std::os::raw::c_void;
         self
     }
 
     ///
-    pub fn usr_ptr<T>(&self) -> &T {
-        unsafe { &*(self.0.usr_ptr as *const T) }
+    pub fn usr_ptr(&self) -> *const std::os::raw::c_void {
+        self.0.usr_ptr as *const std::os::raw::c_void
     }
 
     ///
