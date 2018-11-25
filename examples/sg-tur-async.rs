@@ -8,7 +8,7 @@ fn run_tur(path: &OsStr) -> std::io::Result<()> {
     let cdb = [0; 6];
     let mut task = Task::new();
     task.set_timeout(Duration::from_secs(20));
-    unsafe { task.set_cdb(&cdb) };
+    task.set_cdb(&cdb);
     let mut device = Device::open(path)?;
     assert_eq!(device.send(&[task])?, 1);
     let mut tasks = Vec::new();
