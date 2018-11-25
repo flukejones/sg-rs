@@ -6,7 +6,6 @@ extern crate vecio;
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::marker::PhantomData;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -41,27 +40,24 @@ impl Direction {
 
 ///
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Task<'a>(sys::sg_io_hdr, PhantomData<&'a [u8]>);
+pub struct Task(sys::sg_io_hdr);
 
-impl<'a> Task<'a> {
+impl Task {
     ///
     pub fn new() -> Self {
-        Task(
-            sys::sg_io_hdr {
-                interface_id: 'S' as std::os::raw::c_int,
-                dxfer_direction: sys::SG_DXFER_NONE,
-                ..Default::default()
-            },
-            PhantomData,
-        )
+        Task(sys::sg_io_hdr {
+            interface_id: 'S' as std::os::raw::c_int,
+            dxfer_direction: sys::SG_DXFER_NONE,
+            ..Default::default()
+        })
     }
 
     fn from_underlying(sg: sys::sg_io_hdr) -> Self {
-        Task(sg, PhantomData)
+        Task(sg)
     }
 
     ///
-    pub fn set_cdb(&mut self, buf: &'a [u8]) -> &mut Self {
+    pub fn set_cdb(&mut self, buf: &[u8]) -> &mut Self {
         self.0.cmdp = buf.as_ptr() as *mut u8;
         self.0.cmd_len = buf.len() as u8;
         self
@@ -85,7 +81,7 @@ impl<'a> Task<'a> {
     }
 
     ///
-    pub fn set_data(&mut self, buf: &'a [u8], direction: Direction) -> &mut Self {
+    pub fn set_data(&mut self, buf: &[u8], direction: Direction) -> &mut Self {
         self.0.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
         self.0.dxfer_len = buf.len() as u32;
         self.0.dxfer_direction = direction.to_underlying();
@@ -98,7 +94,7 @@ impl<'a> Task<'a> {
     }
 
     ///
-    pub fn set_sense_buffer(&mut self, buf: &'a [u8]) -> &mut Self {
+    pub fn set_sense_buffer(&mut self, buf: &[u8]) -> &mut Self {
         self.0.sbp = buf.as_ptr() as *mut u8;
         self.0.mx_sb_len = buf.len() as u8;
         self
