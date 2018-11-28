@@ -2,15 +2,23 @@
 #![allow(non_camel_case_types)]
 
 extern crate libc;
-extern crate vecio;
+#[cfg(feature = "polling")]
+extern crate mio;
+extern crate nix;
 
+#[cfg(feature = "polling")]
+use mio::event::Evented;
+#[cfg(feature = "polling")]
+use mio::unix::EventedFd;
+#[cfg(feature = "polling")]
+use mio::{Poll, PollOpt, Ready, Token};
+use nix::sys::uio;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::time::Duration;
-use vecio::Rawv;
 
 ///
 pub mod sys {
@@ -89,8 +97,23 @@ impl Task {
     }
 
     ///
+    pub fn set_data_mut(&mut self, buf: &mut [u8], direction: Direction) -> &mut Self {
+        self.0.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
+        self.0.dxfer_len = buf.len() as u32;
+        self.0.dxfer_direction = direction.to_underlying();
+        self
+    }
+
+    ///
     pub fn data(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.0.dxferp as *const u8, self.0.dxfer_len as usize) }
+    }
+
+    ///
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            std::slice::from_raw_parts_mut(self.0.dxferp as *mut u8, self.0.dxfer_len as usize)
+        }
     }
 
     ///
@@ -173,53 +196,55 @@ impl Device {
     }
 
     /// Returns the number of tasks successfully sent.
-    pub fn send(&mut self, tasks: &[Task]) -> io::Result<usize> {
+    pub fn send(&self, tasks: &[Task]) -> io::Result<usize> {
         if tasks.is_empty() {
             return Ok(0);
         }
 
-        let mut bufs: [&[u8]; sys::SG_MAX_QUEUE as usize] = unsafe { std::mem::uninitialized() };
-        for (task, mut buf) in tasks.iter().zip(bufs.iter_mut()) {
-            *buf = unsafe {
+        let mut iovecs: [uio::IoVec<&[u8]>; sys::SG_MAX_QUEUE as usize] =
+            unsafe { std::mem::uninitialized() };
+        for (task, mut iovec) in tasks.iter().zip(iovecs.iter_mut()) {
+            *iovec = uio::IoVec::from_slice(unsafe {
                 std::slice::from_raw_parts(
                     &task.0 as *const sys::sg_io_hdr as *const u8,
                     std::mem::size_of::<sys::sg_io_hdr>(),
                 )
-            }
+            });
         }
 
         loop {
-            match self.0.writev(&bufs[..tasks.len()]) {
+            match uio::writev(self.0.as_raw_fd(), &iovecs[..tasks.len()]) {
                 Ok(n) => break Ok(n / std::mem::size_of::<sys::sg_io_hdr>()),
-                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => break Err(e),
+                Err(nix::Error::Sys(ref e)) if e == &nix::errno::Errno::EINTR => {}
+                Err(nix::Error::Sys(e)) => break Err(e.into()),
+                _ => unreachable!(),
             }
         }
     }
 
     /// Returns the number of tasks received - how many were added to `tasks`.
-    pub fn receive(&mut self, tasks: &mut Vec<Task>) -> io::Result<usize> {
+    pub fn receive(&self, tasks: &mut Vec<Task>) -> io::Result<usize> {
         let mut hdrs: [sys::sg_io_hdr; sys::SG_MAX_QUEUE as usize] =
             unsafe { std::mem::uninitialized() };
-        let mut bufs: [&mut [u8]; sys::SG_MAX_QUEUE as usize] =
+        let mut iovecs: [uio::IoVec<&mut [u8]>; sys::SG_MAX_QUEUE as usize] =
             unsafe { std::mem::uninitialized() };
 
-        for (mut hdr, mut buf) in hdrs.iter_mut().zip(bufs.iter_mut()) {
-            *buf = unsafe {
+        for (mut hdr, mut iovec) in hdrs.iter_mut().zip(iovecs.iter_mut()) {
+            *iovec = uio::IoVec::from_mut_slice(unsafe {
                 std::slice::from_raw_parts_mut(
                     hdr as *mut sys::sg_io_hdr as *mut u8,
                     std::mem::size_of::<sys::sg_io_hdr>(),
                 )
-            };
+            });
         }
 
         let bytes_read = loop {
-            match self.0.readv(&bufs) {
+            match uio::readv(self.0.as_raw_fd(), &mut iovecs) {
                 Ok(n) => break n,
-                Err(ref e)
-                    if e.kind() == io::ErrorKind::Interrupted
-                        || e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(e),
+                Err(nix::Error::Sys(ref e))
+                    if e == &nix::errno::Errno::EINTR || e == &nix::errno::Errno::EAGAIN => {}
+                Err(nix::Error::Sys(e)) => return Err(e.into()),
+                _ => unreachable!(),
             }
         };
 
@@ -235,7 +260,7 @@ impl Device {
     }
 
     ///
-    pub fn perform(&mut self, task: &Task) -> io::Result<()> {
+    pub fn perform(&self, task: &Task) -> io::Result<()> {
         #[cfg(target_env = "musl")]
         let request = sys::SG_IO as i32;
         #[cfg(not(target_env = "musl"))]
@@ -247,6 +272,39 @@ impl Device {
         } else {
             Ok(())
         }
+    }
+}
+
+impl std::os::unix::io::AsRawFd for Device {
+    fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
+        self.0.as_raw_fd()
+    }
+}
+
+#[cfg(feature = "polling")]
+impl Evented for Device {
+    fn register(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.0.as_raw_fd()).register(poll, token, interest, opts)
+    }
+
+    fn reregister(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.0.as_raw_fd()).reregister(poll, token, interest, opts)
+    }
+
+    fn deregister(&self, poll: &Poll) -> io::Result<()> {
+        EventedFd(&self.0.as_raw_fd()).deregister(poll)
     }
 }
 
