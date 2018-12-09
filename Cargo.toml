@@ -5,6 +5,7 @@ authors = ["Dror Levin <spatz@psybear.com>"]
 description = "Library for Linux's SCSI Generic (SG) interface"
 repository = "https://github.com/drrlvn/sg"
 license = "Apache-2.0"
+edition = "2018"
 
 [features]
 default = []

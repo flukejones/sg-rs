@@ -1,17 +1,6 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 
-extern crate libc;
-#[cfg(feature = "polling")]
-extern crate mio;
-extern crate nix;
-
-#[cfg(feature = "polling")]
-use mio::event::Evented;
-#[cfg(feature = "polling")]
-use mio::unix::EventedFd;
-#[cfg(feature = "polling")]
-use mio::{Poll, PollOpt, Ready, Token};
 use nix::sys::uio;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -19,6 +8,12 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::time::Duration;
+#[cfg(feature = "polling")]
+use {
+    mio::event::Evented,
+    mio::unix::EventedFd,
+    mio::{Poll, PollOpt, Ready, Token},
+};
 
 ///
 pub mod sys {
@@ -203,7 +198,7 @@ impl Device {
 
         let mut iovecs: [uio::IoVec<&[u8]>; sys::SG_MAX_QUEUE as usize] =
             unsafe { std::mem::uninitialized() };
-        for (task, mut iovec) in tasks.iter().zip(iovecs.iter_mut()) {
+        for (task, iovec) in tasks.iter().zip(iovecs.iter_mut()) {
             *iovec = uio::IoVec::from_slice(unsafe {
                 std::slice::from_raw_parts(
                     &task.0 as *const sys::sg_io_hdr as *const u8,
@@ -229,7 +224,7 @@ impl Device {
         let mut iovecs: [uio::IoVec<&mut [u8]>; sys::SG_MAX_QUEUE as usize] =
             unsafe { std::mem::uninitialized() };
 
-        for (mut hdr, mut iovec) in hdrs.iter_mut().zip(iovecs.iter_mut()) {
+        for (hdr, iovec) in hdrs.iter_mut().zip(iovecs.iter_mut()) {
             *iovec = uio::IoVec::from_mut_slice(unsafe {
                 std::slice::from_raw_parts_mut(
                     hdr as *mut sys::sg_io_hdr as *mut u8,
