@@ -73,8 +73,7 @@ impl Task {
 
     ///
     pub fn set_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.0.timeout =
-            (timeout.as_secs() * 1_000 + (u64::from(timeout.subsec_nanos()) / 1_000_000)) as u32;
+        self.0.timeout = timeout.as_millis() as u32;
         self
     }
 
