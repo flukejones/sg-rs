@@ -2,8 +2,10 @@
 #![allow(non_camel_case_types)]
 
 use nix::sys::uio;
+use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::marker::PhantomPinned;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -42,136 +44,170 @@ impl Direction {
 }
 
 ///
-#[derive(Copy, Clone, Debug, Default)]
-pub struct Task(sys::sg_io_hdr);
+#[derive(Clone, Debug, Default)]
+pub struct Task {
+    inner: sys::sg_io_hdr,
+    cmd: Vec<u8>,
+    data: Vec<u8>,
+    _pin: PhantomPinned,
+}
 
 impl Task {
     ///
     pub fn new() -> Self {
-        Task(sys::sg_io_hdr {
-            interface_id: 'S' as std::os::raw::c_int,
-            dxfer_direction: sys::SG_DXFER_NONE,
-            ..Default::default()
-        })
+        Task {
+            inner: sys::sg_io_hdr {
+                interface_id: 'S' as std::os::raw::c_int,
+                dxfer_direction: sys::SG_DXFER_NONE,
+                ..Default::default()
+            },
+            cmd: Vec::default(),
+            data: Vec::default(),
+            _pin: PhantomPinned::default(),
+        }
     }
 
     fn from_underlying(sg: sys::sg_io_hdr) -> Self {
-        Task(sg)
+        // TODO: verify somehow
+        unsafe {
+            let cmd = Vec::from_raw_parts(sg.cmdp, sg.cmd_len as usize, sg.cmd_len as usize);
+            let data = Vec::from_raw_parts(
+                sg.dxferp as *mut u8,
+                sg.dxfer_len as usize,
+                sg.dxfer_len as usize,
+            );
+            Task {
+                inner: sg,
+                cmd,
+                data,
+                _pin: PhantomPinned::default(),
+            }
+        }
     }
 
     ///
     pub fn set_cdb(&mut self, buf: &[u8]) -> &mut Self {
-        self.0.cmdp = buf.as_ptr() as *mut u8;
-        self.0.cmd_len = buf.len() as u8;
+        self.cmd = buf.to_vec();
+        self.inner.cmdp = self.cmd.as_mut_ptr() as *mut u8;
+        self.inner.cmd_len = buf.len() as u8;
         self
     }
 
     ///
     pub fn cdb(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.0.cmdp, self.0.cmd_len as usize) }
+        unsafe { std::slice::from_raw_parts(self.inner.cmdp, self.inner.cmd_len as usize) }
     }
 
     ///
     pub fn set_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.0.timeout = timeout.as_millis() as u32;
+        self.inner.timeout = timeout.as_millis() as u32;
         self
     }
 
     ///
     pub fn timeout(&self) -> Duration {
-        Duration::from_millis(self.0.timeout.into())
+        Duration::from_millis(self.inner.timeout.into())
     }
 
     ///
     pub fn set_data(&mut self, buf: &[u8], direction: Direction) -> &mut Self {
-        self.0.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
-        self.0.dxfer_len = buf.len() as u32;
-        self.0.dxfer_direction = direction.to_underlying();
+        self.data = buf.to_vec();
+        self.inner.dxferp = self.data.as_mut_ptr() as *mut c_void;
+        self.inner.dxfer_len = buf.len() as u32;
+        self.inner.dxfer_direction = direction.to_underlying();
         self
     }
 
     ///
     pub fn set_data_mut(&mut self, buf: &mut [u8], direction: Direction) -> &mut Self {
-        self.0.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
-        self.0.dxfer_len = buf.len() as u32;
-        self.0.dxfer_direction = direction.to_underlying();
+        self.inner.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
+        self.inner.dxfer_len = buf.len() as u32;
+        self.inner.dxfer_direction = direction.to_underlying();
         self
     }
 
     ///
     pub fn data(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.0.dxferp as *const u8, self.0.dxfer_len as usize) }
+        unsafe {
+            std::slice::from_raw_parts(
+                self.inner.dxferp as *const u8,
+                self.inner.dxfer_len as usize,
+            )
+        }
     }
 
     ///
     pub fn data_mut(&mut self) -> &mut [u8] {
         unsafe {
-            std::slice::from_raw_parts_mut(self.0.dxferp as *mut u8, self.0.dxfer_len as usize)
+            std::slice::from_raw_parts_mut(
+                self.inner.dxferp as *mut u8,
+                self.inner.dxfer_len as usize,
+            )
         }
     }
 
     ///
     pub fn set_sense_buffer(&mut self, buf: &[u8]) -> &mut Self {
-        self.0.sbp = buf.as_ptr() as *mut u8;
-        self.0.mx_sb_len = buf.len() as u8;
+        self.inner.sbp = buf.as_ptr() as *mut u8;
+        self.inner.mx_sb_len = buf.len() as u8;
         self
     }
 
     ///
     pub fn sense_buffer(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.0.sbp, self.0.sb_len_wr as usize) }
+        unsafe { std::slice::from_raw_parts(self.inner.sbp, self.inner.sb_len_wr as usize) }
     }
 
     ///
     pub fn set_flags(&mut self, flags: u32) -> &mut Self {
-        self.0.flags = flags;
+        self.inner.flags = flags;
         self
     }
 
     ///
     pub fn flags(&self) -> u32 {
-        self.0.flags
+        self.inner.flags
     }
 
     ///
     pub fn set_usr_ptr(&mut self, ptr: *const std::os::raw::c_void) -> &mut Self {
-        self.0.usr_ptr = ptr as *mut std::os::raw::c_void;
+        self.inner.usr_ptr = ptr as *mut std::os::raw::c_void;
         self
     }
 
     ///
     pub fn usr_ptr(&self) -> *const std::os::raw::c_void {
-        self.0.usr_ptr as *const std::os::raw::c_void
+        self.inner.usr_ptr as *const std::os::raw::c_void
     }
 
     ///
     pub fn duration(&self) -> u32 {
-        self.0.duration
+        self.inner.duration
     }
 
     ///
     pub fn residual_data(&self) -> i32 {
-        self.0.resid
+        self.inner.resid
     }
 
     ///
     pub fn status(&self) -> u8 {
-        self.0.status
+        self.inner.status
     }
 
     ///
     pub fn host_status(&self) -> u16 {
-        self.0.host_status
+        self.inner.host_status
     }
 
     ///
     pub fn driver_status(&self) -> u16 {
-        self.0.driver_status
+        self.inner.driver_status
     }
 
     ///
     pub fn ok(&self) -> bool {
-        (self.0.info & sys::SG_INFO_OK_MASK) == sys::SG_INFO_OK
+        (self.inner.info & sys::SG_INFO_OK_MASK) == sys::SG_INFO_OK
     }
 }
 
@@ -200,7 +236,7 @@ impl Device {
         for (task, iovec) in tasks.iter().zip(iovecs.iter_mut()) {
             *iovec = uio::IoVec::from_slice(unsafe {
                 std::slice::from_raw_parts(
-                    &task.0 as *const sys::sg_io_hdr as *const u8,
+                    &task.inner as *const sys::sg_io_hdr as *const u8,
                     std::mem::size_of::<sys::sg_io_hdr>(),
                 )
             });
@@ -260,7 +296,7 @@ impl Device {
         #[cfg(not(target_env = "musl"))]
         let request: u64 = sys::SG_IO.into();
 
-        let ret = unsafe { libc::ioctl(self.0.as_raw_fd(), request, &task.0) };
+        let ret = unsafe { libc::ioctl(self.0.as_raw_fd(), request, &task.inner) };
         if ret == -1 {
             Err(io::Error::last_os_error())
         } else {
@@ -284,7 +320,7 @@ impl Evented for Device {
         interest: Ready,
         opts: PollOpt,
     ) -> io::Result<()> {
-        EventedFd(&self.0.as_raw_fd()).register(poll, token, interest, opts)
+        EventedFd(&self.inner.as_raw_fd()).register(poll, token, interest, opts)
     }
 
     fn reregister(
@@ -294,11 +330,11 @@ impl Evented for Device {
         interest: Ready,
         opts: PollOpt,
     ) -> io::Result<()> {
-        EventedFd(&self.0.as_raw_fd()).reregister(poll, token, interest, opts)
+        EventedFd(&self.inner.as_raw_fd()).reregister(poll, token, interest, opts)
     }
 
     fn deregister(&self, poll: &Poll) -> io::Result<()> {
-        EventedFd(&self.0.as_raw_fd()).deregister(poll)
+        EventedFd(&self.inner.as_raw_fd()).deregister(poll)
     }
 }
 
@@ -315,7 +351,7 @@ mod test {
     fn test_task_fields() {
         let mut task = Task::new();
         let x = 42;
-        assert_eq!(task.0.interface_id as u8 as char, 'S');
+        assert_eq!(task.inner.interface_id as u8 as char, 'S');
         task.set_usr_ptr(&x as *const i32 as *const std::os::raw::c_void);
         assert_eq!(task.usr_ptr() as *const i32, &x as *const i32);
         assert_eq!(unsafe { *(task.usr_ptr() as *const i32) }, x);
