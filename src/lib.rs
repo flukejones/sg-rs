@@ -46,8 +46,12 @@ pub struct Task {
     inner: sys::sg_io_hdr,
     cmd: Vec<u8>,
     data: Vec<u8>,
+    sense: Vec<u8>,
     _pin: PhantomPinned,
 }
+
+unsafe impl Send for Task {}
+unsafe impl Sync for Task {}
 
 impl Task {
     pub fn new() -> Self {
@@ -59,6 +63,7 @@ impl Task {
             },
             cmd: Vec::default(),
             data: Vec::default(),
+            sense: Vec::default(),
             _pin: PhantomPinned,
         }
     }
@@ -76,6 +81,7 @@ impl Task {
                 inner: sg,
                 cmd,
                 data,
+                sense: Vec::new(),
                 _pin: PhantomPinned,
             }
         }
@@ -109,39 +115,23 @@ impl Task {
         self
     }
 
-    pub fn set_data_mut(&mut self, buf: &mut [u8], direction: Direction) -> &mut Self {
-        self.inner.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
-        self.inner.dxfer_len = buf.len() as u32;
-        self.inner.dxfer_direction = direction.to_underlying();
-        self
-    }
-
     pub fn data(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.inner.dxferp as *const u8,
-                self.inner.dxfer_len as usize,
-            )
-        }
+        &self.data
     }
 
     pub fn data_mut(&mut self) -> &mut [u8] {
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                self.inner.dxferp as *mut u8,
-                self.inner.dxfer_len as usize,
-            )
-        }
+        &mut self.data
     }
 
     pub fn set_sense_buffer(&mut self, buf: &[u8]) -> &mut Self {
-        self.inner.sbp = buf.as_ptr() as *mut u8;
-        self.inner.mx_sb_len = buf.len() as u8;
+        self.sense = buf.to_vec();
+        self.inner.sbp = self.sense.as_ptr() as *mut u8;
+        self.inner.mx_sb_len = self.sense.len() as u8;
         self
     }
 
     pub fn sense_buffer(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.inner.sbp, self.inner.sb_len_wr as usize) }
+        &self.sense
     }
 
     pub fn set_flags(&mut self, flags: u32) -> &mut Self {
@@ -153,14 +143,15 @@ impl Task {
         self.inner.flags
     }
 
-    pub fn set_usr_ptr(&mut self, ptr: *const std::os::raw::c_void) -> &mut Self {
-        self.inner.usr_ptr = ptr as *mut std::os::raw::c_void;
-        self
-    }
+    // TODO: this needs to be a generic type on Task and store that type within
+    // pub fn set_usr_ptr(&mut self, ptr: *const std::os::raw::c_void) -> &mut Self {
+    //     self.inner.usr_ptr = ptr as *mut std::os::raw::c_void;
+    //     self
+    // }
 
-    pub fn usr_ptr(&self) -> *const std::os::raw::c_void {
-        self.inner.usr_ptr as *const std::os::raw::c_void
-    }
+    // pub fn usr_ptr(&self) -> *const std::os::raw::c_void {
+    //     self.inner.usr_ptr as *const std::os::raw::c_void
+    // }
 
     pub fn duration(&self) -> u32 {
         self.inner.duration
@@ -321,15 +312,15 @@ mod test {
         assert_eq!(super::sys::SG_IO, 0x2285);
     }
 
-    #[test]
-    fn test_task_fields() {
-        let mut task = Task::new();
-        let x = 42;
-        assert_eq!(task.inner.interface_id as u8 as char, 'S');
-        task.set_usr_ptr(&x as *const i32 as *const std::os::raw::c_void);
-        assert_eq!(task.usr_ptr() as *const i32, &x as *const i32);
-        assert_eq!(unsafe { *(task.usr_ptr() as *const i32) }, x);
-    }
+    // #[test]
+    // fn test_task_fields() {
+    //     let mut task = Task::new();
+    //     let x = 42;
+    //     assert_eq!(task.inner.interface_id as u8 as char, 'S');
+    //     task.set_usr_ptr(&x as *const i32 as *const std::os::raw::c_void);
+    //     assert_eq!(task.usr_ptr() as *const i32, &x as *const i32);
+    //     assert_eq!(unsafe { *(task.usr_ptr() as *const i32) }, x);
+    // }
 
     #[test]
     fn test_cdb() {

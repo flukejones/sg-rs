@@ -50,7 +50,7 @@ fn save_task() -> Task {
     task
 }
 
-fn rgb_task(led: u32, rgb: &[u8]) -> Task {
+fn rgb_task(led: u32, rgb: &[u8; 3]) -> Task {
     let mut task = Task::new();
     task.set_cdb(array(led * 3 + ENE_REG_COLORS_EFFECT_V2).as_slice());
     task.set_data(rgb, sg::Direction::ToDevice);
