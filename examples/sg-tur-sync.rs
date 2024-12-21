@@ -86,9 +86,13 @@ fn run_tur(path: &OsStr) -> std::io::Result<()> {
 
     // can't set dir if static
     for i in 0..4 {
-        let task = rgb_task(i, &[5 * i as u8, 5 / (i as u8 + 1), 15 - 5 * i as u8]);
+        let task = rgb_task(i, &[20, 0, 0]);
         device.perform(&task)?;
     }
+    let task = apply_task();
+    device.perform(&task)?;
+    let task = save_task();
+    device.perform(&task)?;
 
     // allows colour select: 1, 2, 3, 7, 9
     // allows dir: 5, 7, 8, 10 !12 !13

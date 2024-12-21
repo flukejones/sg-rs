@@ -13,8 +13,8 @@ polling = ["mio"]
 
 [dependencies]
 libc = "0.2.43"
-nix = "0.11.0"
-mio = {version = "0.6.16", optional = true}
+nix = {version = "0.29.0", features = ["uio", "aio"]}
+mio = {version = "1.0.3", optional = true}
 
 [build-dependencies]
-bindgen = "0.43.2"
+bindgen = "0.71.1"

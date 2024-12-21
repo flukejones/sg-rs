@@ -4,7 +4,7 @@
 use nix::sys::uio;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, IoSlice};
 use std::marker::PhantomPinned;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
@@ -17,13 +17,11 @@ use {
     mio::{Poll, PollOpt, Ready, Token},
 };
 
-///
 pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
     pub const SG_FLAG_Q_AT_TAIL: u32 = 0x10;
 }
 
-///
 #[derive(Debug, Copy, Clone)]
 pub enum Direction {
     None,
@@ -43,7 +41,6 @@ impl Direction {
     }
 }
 
-///
 #[derive(Clone, Debug, Default)]
 pub struct Task {
     inner: sys::sg_io_hdr,
@@ -53,7 +50,6 @@ pub struct Task {
 }
 
 impl Task {
-    ///
     pub fn new() -> Self {
         Task {
             inner: sys::sg_io_hdr {
@@ -63,7 +59,7 @@ impl Task {
             },
             cmd: Vec::default(),
             data: Vec::default(),
-            _pin: PhantomPinned::default(),
+            _pin: PhantomPinned,
         }
     }
 
@@ -80,36 +76,31 @@ impl Task {
                 inner: sg,
                 cmd,
                 data,
-                _pin: PhantomPinned::default(),
+                _pin: PhantomPinned,
             }
         }
     }
 
-    ///
     pub fn set_cdb(&mut self, buf: &[u8]) -> &mut Self {
         self.cmd = buf.to_vec();
-        self.inner.cmdp = self.cmd.as_mut_ptr() as *mut u8;
+        self.inner.cmdp = self.cmd.as_mut_ptr();
         self.inner.cmd_len = buf.len() as u8;
         self
     }
 
-    ///
     pub fn cdb(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.inner.cmdp, self.inner.cmd_len as usize) }
     }
 
-    ///
     pub fn set_timeout(&mut self, timeout: Duration) -> &mut Self {
         self.inner.timeout = timeout.as_millis() as u32;
         self
     }
 
-    ///
     pub fn timeout(&self) -> Duration {
         Duration::from_millis(self.inner.timeout.into())
     }
 
-    ///
     pub fn set_data(&mut self, buf: &[u8], direction: Direction) -> &mut Self {
         self.data = buf.to_vec();
         self.inner.dxferp = self.data.as_mut_ptr() as *mut c_void;
@@ -118,7 +109,6 @@ impl Task {
         self
     }
 
-    ///
     pub fn set_data_mut(&mut self, buf: &mut [u8], direction: Direction) -> &mut Self {
         self.inner.dxferp = buf.as_ptr() as *mut std::os::raw::c_void;
         self.inner.dxfer_len = buf.len() as u32;
@@ -126,7 +116,6 @@ impl Task {
         self
     }
 
-    ///
     pub fn data(&self) -> &[u8] {
         unsafe {
             std::slice::from_raw_parts(
@@ -136,7 +125,6 @@ impl Task {
         }
     }
 
-    ///
     pub fn data_mut(&mut self) -> &mut [u8] {
         unsafe {
             std::slice::from_raw_parts_mut(
@@ -146,72 +134,59 @@ impl Task {
         }
     }
 
-    ///
     pub fn set_sense_buffer(&mut self, buf: &[u8]) -> &mut Self {
         self.inner.sbp = buf.as_ptr() as *mut u8;
         self.inner.mx_sb_len = buf.len() as u8;
         self
     }
 
-    ///
     pub fn sense_buffer(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.inner.sbp, self.inner.sb_len_wr as usize) }
     }
 
-    ///
     pub fn set_flags(&mut self, flags: u32) -> &mut Self {
         self.inner.flags = flags;
         self
     }
 
-    ///
     pub fn flags(&self) -> u32 {
         self.inner.flags
     }
 
-    ///
     pub fn set_usr_ptr(&mut self, ptr: *const std::os::raw::c_void) -> &mut Self {
         self.inner.usr_ptr = ptr as *mut std::os::raw::c_void;
         self
     }
 
-    ///
     pub fn usr_ptr(&self) -> *const std::os::raw::c_void {
         self.inner.usr_ptr as *const std::os::raw::c_void
     }
 
-    ///
     pub fn duration(&self) -> u32 {
         self.inner.duration
     }
 
-    ///
     pub fn residual_data(&self) -> i32 {
         self.inner.resid
     }
 
-    ///
     pub fn status(&self) -> u8 {
         self.inner.status
     }
 
-    ///
     pub fn host_status(&self) -> u16 {
         self.inner.host_status
     }
 
-    ///
     pub fn driver_status(&self) -> u16 {
         self.inner.driver_status
     }
 
-    ///
     pub fn ok(&self) -> bool {
         (self.inner.info & sys::SG_INFO_OK_MASK) == sys::SG_INFO_OK
     }
 }
 
-///
 pub struct Device(File);
 
 impl Device {
@@ -231,50 +206,50 @@ impl Device {
             return Ok(0);
         }
 
-        let mut iovecs: [uio::IoVec<&[u8]>; sys::SG_MAX_QUEUE as usize] =
-            unsafe { std::mem::uninitialized() };
-        for (task, iovec) in tasks.iter().zip(iovecs.iter_mut()) {
-            *iovec = uio::IoVec::from_slice(unsafe {
-                std::slice::from_raw_parts(
-                    &task.inner as *const sys::sg_io_hdr as *const u8,
-                    std::mem::size_of::<sys::sg_io_hdr>(),
-                )
-            });
-        }
+        // NOTE: sg_io_hdr is a struct, it is transmuted to an array/slice
+        let iovecs: Vec<IoSlice> = tasks
+            .iter()
+            .map(|task| {
+                io::IoSlice::new(unsafe {
+                    std::slice::from_raw_parts(
+                        &task.inner as *const sys::sg_io_hdr as *const u8,
+                        std::mem::size_of::<sys::sg_io_hdr>(),
+                    )
+                })
+            })
+            .collect();
 
         loop {
-            match uio::writev(self.0.as_raw_fd(), &iovecs[..tasks.len()]) {
+            match uio::writev(&self.0, &iovecs[..tasks.len()]) {
                 Ok(n) => break Ok(n / std::mem::size_of::<sys::sg_io_hdr>()),
-                Err(nix::Error::Sys(ref e)) if e == &nix::errno::Errno::EINTR => {}
-                Err(nix::Error::Sys(e)) => break Err(e.into()),
-                _ => unreachable!(),
+                Err(nix::errno::Errno::EINTR) => {}
+                Err(e) => break Err(e.into()),
             }
         }
     }
 
     /// Returns the number of tasks received - how many were added to `tasks`.
     pub fn receive(&self, tasks: &mut Vec<Task>) -> io::Result<usize> {
-        let mut hdrs: [sys::sg_io_hdr; sys::SG_MAX_QUEUE as usize] =
-            unsafe { std::mem::uninitialized() };
-        let mut iovecs: [uio::IoVec<&mut [u8]>; sys::SG_MAX_QUEUE as usize] =
-            unsafe { std::mem::uninitialized() };
+        let mut hdrs = [sys::sg_io_hdr::default(); sys::SG_MAX_QUEUE as usize];
 
-        for (hdr, iovec) in hdrs.iter_mut().zip(iovecs.iter_mut()) {
-            *iovec = uio::IoVec::from_mut_slice(unsafe {
-                std::slice::from_raw_parts_mut(
-                    hdr as *mut sys::sg_io_hdr as *mut u8,
-                    std::mem::size_of::<sys::sg_io_hdr>(),
-                )
-            });
-        }
+        let mut iovecs: Vec<io::IoSliceMut> = hdrs
+            .iter_mut()
+            .map(|hdr| {
+                io::IoSliceMut::new(unsafe {
+                    std::slice::from_raw_parts_mut(
+                        hdr as *mut sys::sg_io_hdr as *mut u8,
+                        std::mem::size_of::<sys::sg_io_hdr>(),
+                    )
+                })
+            })
+            .collect();
 
         let bytes_read = loop {
-            match uio::readv(self.0.as_raw_fd(), &mut iovecs) {
+            match uio::readv(&self.0, iovecs.as_mut_slice()) {
                 Ok(n) => break n,
-                Err(nix::Error::Sys(ref e))
-                    if e == &nix::errno::Errno::EINTR || e == &nix::errno::Errno::EAGAIN => {}
-                Err(nix::Error::Sys(e)) => return Err(e.into()),
-                _ => unreachable!(),
+                Err(ref e) if e == &nix::errno::Errno::EINTR || e == &nix::errno::Errno::EAGAIN => {
+                }
+                Err(e) => return Err(e.into()),
             }
         };
 
@@ -282,14 +257,13 @@ impl Device {
         let tasks_read = bytes_read / std::mem::size_of::<sys::sg_io_hdr>();
         assert!(tasks_read > 0);
         tasks.extend(
-            hdrs.into_iter()
+            hdrs.iter()
                 .map(|hdr| Task::from_underlying(*hdr))
                 .take(tasks_read),
         );
         Ok(tasks_read)
     }
 
-    ///
     pub fn perform(&self, task: &Task) -> io::Result<()> {
         #[cfg(target_env = "musl")]
         let request = sys::SG_IO as i32;
