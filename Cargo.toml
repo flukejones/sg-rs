@@ -1,7 +1,7 @@
 [package]
 name = "sg"
-version = "0.3.0"
-authors = ["Dror Levin <spatz@psybear.com>"]
+version = "0.4.0"
+authors = ["Dror Levin <spatz@psybear.com>", "Luke Jones <luke@ljones.dev>"]
 description = "Library for Linux's SCSI Generic (SG) interface"
 repository = "https://github.com/drrlvn/sg"
 license = "Apache-2.0"
